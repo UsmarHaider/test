@@ -156,86 +156,59 @@ class MDPAgent(Agent):
 			self.map.setValue(walls[i][0], walls[i][1], "#")
 
 	def makeValueMap(self, state):
-		# This function returns a dictionary of all possible coordinates on a grid
-		# As well as all the values that are assigned to each coordinate-category
-		# Food is given a value of 5
-		# Empty spaces are given a value of 0
-		# Capsules are given a value of 5
+        # Updated function to incorporate negative rewards for proximity to ghosts
+        food = api.food(state)
+        walls = api.walls(state)
+        capsules = api.capsules(state)
+        pacman = api.whereAmI(state)
+        corners = api.corners(state)
 
+        if pacman not in self.visited:
+            self.visited.append(pacman)
 
-		food = api.food(state)
-		walls = api.walls(state)
-		capsules = api.capsules(state)
-		pacman = api.whereAmI(state)
-		corners = api.corners(state)
+        for i in food:
+            if i not in self.foodMap:
+                self.foodMap.append(i)
 
-		# If pacman's location has not been recorded in a list of visited locations
-		# Record it
-		if pacman not in self.visited:
-			self.visited.append(pacman)
+        for i in walls:
+            if i not in self.wallMap:
+                self.wallMap.append(i)
 
-		# Up
-		for i in food:
-			if i not in self.foodMap:
-				self.foodMap.append(i)
+        for i in capsules:
+            if i not in self.capsuleMap:
+                self.capsuleMap.append(i)
 
-		for i in walls:
-			if i not in self.wallMap:
-				self.wallMap.append(i)
+        self.foodDict = dict.fromkeys(self.foodMap, 5)
+        self.wallDict = dict.fromkeys(self.wallMap, '#')
+        self.capsuleDict = dict.fromkeys(self.capsuleMap, 5)
 
-		for i in capsules:
-			if i not in self.capsuleMap:
-				self.capsuleMap.append(i)
+        valueMap = {}
+        valueMap.update(self.foodDict)
+        valueMap.update(self.wallDict)
+        valueMap.update(self.capsuleDict)
 
+        for i in range(self.getLayoutWidth(corners) - 1):
+            for j in range(self.getLayoutHeight(corners) - 1):
+                if (i, j) not in valueMap.keys():
+                    valueMap[(i, j)] = 0
 
-		# Create a dictionary storing all
-		# Food, wall and capsule locations, while assigning values to them
-		self.foodDict = dict.fromkeys(self.foodMap, 5)
-		self.wallDict = dict.fromkeys(self.wallMap, '#')
-		self.capsuleDict = dict.fromkeys(self.capsuleMap, 5)
+        for i in self.foodMap:
+            if i in self.visited:
+                valueMap[i] = 0
 
-		# Initiate valueMap to store all coordinates
-		valueMap = {}
-		valueMap.update(self.foodDict)
-		valueMap.update(self.wallDict)
-		valueMap.update(self.capsuleDict)
+        for i in self.capsuleMap:
+            if i in self.visited:
+                valueMap[i] = 0
 
-		# Using the APIs to get coordinates tends to leave out pacman
-		# Initial position
-		# This will sweep through all available coordinates
-		# And add the square to the list with 0
+        ghostPositions = api.ghosts(state)
+        for pos in ghostPositions:
+            for dx in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    nearby = (pos[0] + dx, pos[1] + dy)
+                    if nearby in valueMap and valueMap[nearby] != '#':
+                        valueMap[nearby] -= 10
 
-		for i in range(self.getLayoutWidth(corners) - 1):
-			for j in range(self.getLayoutHeight(corners) - 1):
-				if (i, j) not in valueMap.keys():
-					valueMap[(i, j)] = 0
-
-		# Update function. If pacman has been seen to visit a square
-		# It means he has eaten the food or capsules there
-		# Thus, set their values to 0
-		for i in self.foodMap:
-			if i in self.visited:
-				valueMap[i] = 0
-
-		for i in self.capsuleMap:
-			if i in self.visited:
-				valueMap[i] = 0
-
-		# Another update function
-		# Updates the location of the ghost
-		ghosts = api.ghosts(state)
-		ghostStates = api.ghostStatesWithTimes(state)
-
-		for i in valueMap.keys():
-			for j in range(len(ghosts)):
-				ghostTime = ghostStates[j][1]
-				#Convert coordinates to int (keys are stored as int, but coordinates from API are stored as float)
-				if ((int(ghosts[j][0])), (int(ghosts[j][1]))) == i:
-					valueMap[i] = -10
-				#elif ((int(ghosts[j][0])), (int(ghosts[j][1]))) == i and ghostTime >= 5:
-				#	valueMap[i] = 5
-
-		return valueMap
+        return valueMap
 
 
 	def getTransition(self, x, y, valueMap):
@@ -548,49 +521,84 @@ class MDPAgent(Agent):
 		return self.util_dict.keys()[self.util_dict.values().index(maxMEU)]
 
 	def getAction(self, state):
+        print "-" * 30
+        legal = api.legalActions(state)
+        corners = api.corners(state)
 
-		print "-" * 30
-		legal = api.legalActions(state)
-		corners = api.corners(state)
+        maxWidth = self.getLayoutWidth(corners) - 1
+        maxHeight = self.getLayoutHeight(corners) - 1
 
-		maxWidth = self.getLayoutWidth(corners) - 1
-		maxHeight = self.getLayoutHeight(corners) - 1
+        # Update valueMap for the current state
+        valueMap = self.makeValueMap(state)
 
-		# This function updates all locations at every state
-		# for every action retrieved by getAction, thi3s map is recalibrated
-		valueMap = self.makeValueMap(state)
+        # Choose value iteration method based on the size of the map
+        if maxWidth >= 10 and maxHeight >= 10:
+            self.valueIteration(state, 0, 0.6, valueMap)
+        else:
+            self.valueIterationSmall(state, 0.2, 0.7, valueMap)
 
-		# If the map is large enough, calculate buffers around ghosts
-		# also use higher number of iteration loops to get a more reasonable policy
+        # Implementing evasion strategy when ghosts are near
+        pacman = api.whereAmI(state)
+        ghostPositions = api.ghosts(state)
+        for ghost in ghostPositions:
+            if self.isNear(pacman, ghost):
+                return self.evasionMove(state, ghost)
 
-		if maxWidth >= 10 and maxHeight >= 10:
-			self.valueIteration(state, 0, 0.6, valueMap)
-		else:
-			self.valueIterationSmall(state, 0.2, 0.7, valueMap)
+        # Determine the best move based on the updated value map
+        bestMove = self.getPolicy(state, valueMap)
+        print "Best move:", bestMove
 
-		print "best move: "
-		print self.getPolicy(state, valueMap)
+        # Update values in the map with iterations
+        for i in range(self.map.getWidth()):
+            for j in range(self.map.getHeight()):
+                if self.map.getValue(i, j) != "#":
+                    self.map.setValue(i, j, valueMap[(i, j)])
 
-		# Update values in map with iterations
-		for i in range(self.map.getWidth()):
-			for j in range(self.map.getHeight()):
-				if self.map.getValue(i, j) != "#":
-					self.map.setValue(i, j, valueMap[(i, j)])
+        self.map.prettyDisplay()
 
-		self.map.prettyDisplay()
+        # Execute the best move based on the policy
+        if bestMove == "n_util":
+            return api.makeMove('North', legal)
+        elif bestMove == "s_util":
+            return api.makeMove('South', legal)
+        elif bestMove == "e_util":
+            return api.makeMove('East', legal)
+        elif bestMove == "w_util":
+            return api.makeMove('West', legal)
+        else:
+            # Default move if no utility is found (or stay in place)
+            return api.makeMove(Directions.STOP, legal)
 
+	def isNear(self, pacman, ghost):
+        # Helper function to check if a ghost is near Pacman
+        return abs(pacman[0] - ghost[0]) <= 2 and abs(pacman[1] - ghost[1]) <= 2
 
-		# If the key of the move with MEU = n_util, return North as the best decision
-		# And so on...
+    def evasionMove(self, state, ghost):
+        # Function to determine the best evasion move
+        legal = api.legalActions(state)
+        bestMove = None
+        maxDistance = 0
+        for move in legal:
+            nextPos = self.getNextPosition(api.whereAmI(state), move)
+            distance = self.getDistance(nextPos, ghost)
+            if distance > maxDistance:
+                maxDistance = distance
+                bestMove = move
+        return api.makeMove(bestMove, legal)
 
-		if self.getPolicy(state, valueMap) == "n_util":
-			return api.makeMove('North', legal)
+    def getNextPosition(self, currentPosition, move):
+        # Calculate next position based on the move
+        if move == 'North':
+            return (currentPosition[0], currentPosition[1] + 1)
+        elif move == 'South':
+            return (currentPosition[0], currentPosition[1] - 1)
+        elif move == 'East':
+            return (currentPosition[0] + 1, currentPosition[1])
+        elif move == 'West':
+            return (currentPosition[0] - 1, currentPosition[1])
+        else:
+            return currentPosition
 
-		if self.getPolicy(state, valueMap) == "s_util":
-			return api.makeMove('South', legal)
-
-		if self.getPolicy(state, valueMap) == "e_util":
-			return api.makeMove('East', legal)
-
-		if self.getPolicy(state, valueMap) == "w_util":
-			return api.makeMove('West', legal)
+    def getDistance(self, pos1, pos2):
+        # Calculate Manhattan distance between two positions
+        return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
