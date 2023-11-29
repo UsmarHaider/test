@@ -1,9 +1,8 @@
-# mapAgents.py
-# parsons/11-nov-2017
+# mdpAgents.py
+# parsons/20-nov-2017
 #
-# Version 1.0
 #
-# A simple map-building to work with the PacMan AI projects from:
+# Intended to work with the PacMan AI projects from:
 #
 # http://ai.berkeley.edu/
 #
@@ -23,339 +22,423 @@
 # Student side autograding was added by Brad Miller, Nick Hay, and
 # Pieter Abbeel (pabbeel@cs.berkeley.edu).
 
-# The agent here is an extension of the above code written by Simon
-# Parsons, based on the code in pacmanAgents.py
+# The agent here is was written by Simon Parsons, based on the code in
+# pacmanAgents.py
+#
+# The agent here was then modified by Dariana Agape.
+#
+import math
 
 from pacman import Directions
 from game import Agent
 import api
+import random
+import game
+import util
 
 
 class MDPAgent(Agent):
 
+    # Constructor: this gets run when we first invoke pacman.py
     def __init__(self):
-        """The init method initialise the variable """
-        self.ghostHub = []  # list of 8-tile ghost starting area on medium grid
-        self.tenticles = - 10  # Sets Negative reward for Ghost Radius
-        self.NSEW_Direct = ["North", "South", "East", "West"]  # All Directions/ Movements are based on this Index
-        self.RottenFoodLength = 3  # Determine Range of Rotten Food Function
-        self.grid = []  # Defines Dimensions of the Grid
-        self.UDic = {}  # Resets iteration Dictionary
-        self.blank_dictionary ={}
-        self.hub = - 1  # Assigns Negative Reward to 8-tile ghost starting area on medium grid
-        self.blank_list = []  # Initialises List that contains all blank (i.e non-fixed reward) states
-        self.eaten_list = []  # List of all the consumed consumables
-        self.tentacles_list = []  # Creates a list of the tentacle/ negative rewards radius
-        print "The electric things have their life too. Paltry as those lives are"
+        print "Starting up MDPAgent!"
+        name = "Pacman"
 
+        # define rewards
+        self.wallReward = None
+        self.foodReward = 1
+        self.capsuleReward = 10
+        self.blankReward = -0.04
+        self.ghostReward = -800
+        self.dangerZoneReward = -600
+        self.edibleGhostReward = 20
+
+        self.probabilityRightAction = 0.8
+        self.probabilityWrongAction = 0.1
+
+        self.discountFactor = 0.9
+
+        self.width = 0
+        self.height = 0
+
+        self.map = None
+
+    # Gets run after an MDPAgent object is created and once there is
+    # game state to access.
+    def registerInitialState(self, state):
+        print "Running registerInitialState for MDPAgent!"
+        print "I'm at:"
+        print api.whereAmI(state)
+        corners = api.corners(state)
+        self.height = corners[1][0] + 1
+        self.width = corners[2][1] + 1
+        self.map = self.createMap(state)
+
+    # This is what gets run in between multiple games
     def final(self, state):
-        """ The final method is used to resets all the list prior to every iteration of the program"""
-        self.ghostHub = []  # list of 8-tile ghost starting area on medium grid
-        self.tenticles = - 10  # Sets Negative reward for Ghost Radius
-        self.NSEW_Direct = ["North", "South", "East", "West"]  # All Directions/ Movements are based on this Index
-        self.RottenFoodLength = 3  # Determine Range of Rotten Food Function
-        self.grid = []  # Defines Dimensions of the Grid
-        self.UDic = {}  # Resets iteration Dictionary
-        self.blank_dictionary ={}
-        self.hub = -1  # Assigns Negative Reward to 8-tile ghost starting area on medium grid
-        self.blank_list = []  # Initialises List that contains all blank (i.e non-fixed reward) states on the grid
-        self.eaten_list = []  # List of all the consumed consumables
-        self.tentacles_list = []  # Creates a list of the tentacle/ negative rewards radius
-        print "Gerty, am I a clone?"
+        print "Looks like the game just ended!"
+        # define rewards
+        self.wallReward = None
+        self.foodReward = 1
+        self.capsuleReward = 10
+        self.blankReward = -0.04
+        self.ghostReward = -800
+        self.dangerZoneReward = -600
+        self.edibleGhostReward = 20
 
-    def gridBuilder(self, state):
-        """Generates a list of all the spaces on the grid; using the Height and Width"""
-        for x in range(self.getLayoutWidth(api.corners(state)) - 1):
-            for y in range(self.getLayoutHeight(api.corners(state)) - 1):
-                if (x, y) not in self.wallcoord and (x, y) not in self.grid:
-                    self.grid.append((x, y))
-        return self.grid
+        self.probabilityRightAction = 0.8
+        self.probabilityWrongAction = 0.1
 
-    # Artificial Intelligence; Reasoning and Decision Making ; Tutorial 5; MapAgent
-    def getLayoutHeight(self, corners):
-        height = - 1
-        for i in range(len(corners)):
-            if corners[i][1] > height:
-                height = corners[i][1]
-        return height + 1
+        self.discountFactor = 0.9
 
-    # Artificial Intelligence; Reasoning and Decision Making ; Tutorial 5; MapAgent
-    def getLayoutWidth(self, corners):
-        width = - 1
-        for i in range(len(corners)):
-            if corners[i][0] > width:
-                width = corners[i][0]
-        return width + 1
+        self.width = 0
+        self.height = 0
 
-    def rewardDictionary(self, state):
-        """The Reward Method creates a rewards dictionary which assigns a reward to some key features on the grid (i.e.
-        Food, Capsules, Ghosts, Ghost Hub and Backspaces) on the grid. The functionality of the Method varies
-        for each grid. The reward for the ghost are assigned via a separate set of methods"""
-        # Initialises a rewards dictionary
-        RewardDic = {}  # Will contain Rewards/Values for Consumables, Ghosts, Rotten Food and Blank Spaces
-        self.Fixed_Reward_Dic = {}  # Negative Rewards Dictionary; Contains Rewards for Ghost Radius and Ghost Hub
-        # # Creates individual dictionaries for consumables using APIs; assigns respective rewards
-        food_dictionary = {i: 1 for i in self.foodcoord}
-        capsule_dictionary = {i: 2 for i in self.capsulecoord}
-        # Adds consumables to Rewards Dictionary
-        RewardDic.update(food_dictionary)
-        RewardDic.update(capsule_dictionary)
-        # Checks Grid Size via number of tiles on grid; Less Than 20 = Small; Greater Than 20 = Medium Classic
-        if len(self.grid) < 20:
-            # Iterates over all tiles on grid
-            for i in self.grid:
-                # Check for all non-key feature tiles; i.e tiles with No Consumables, Walls, and/or Ghosts.
-                if i not in self.foodcoord and i not in self.wallcoord and i not in self.blank_list and i not in \
-                        self.ghostcoord:
-                    # Adds Blank Spaces to a list of all the space with no key feature; Blank Space List
-                    self.blank_list.append(i)
-            # # Creates a dictionaries of Blank Spaces; assigns a reward of zero i.e., initialises the iteration space
-            self.blank_dictionary = {i: 0 for i in self.blank_list}
-        else:
-            # Creates a list of all the consumed consumables; only way to remove Ghost Starting Area on Medium Classic
-            if self.pacmancoord not in self.eaten_list:
-                # If pacman has been to a tile it has eaten the food
-                self.eaten_list.append(self.pacmancoord)
-            # Obtains coordinate for the Ghost Starting Area i.e 8 tiles @ Grid Centre; adds coordinates to Hub list
-            for i in self.grid:
-                #  Check for all non-key feature tiles; i.e tiles with No Consumables, Walls, and/or Ghosts.
-                if i not in self.foodcoord and i not in self.capsulecoord and i not in self.eaten_list and \
-                        i not in self.wallcoord and i not in self.ghostHub:
-                    # Pacman sometimes gets stuck at entrance of Ghost Hub; Therefore GhostHub is created
-                    self.ghostHub.append(i)
-            # Iterates over all tiles on grid
-            for i in self.grid:
-                # Check for all non-key feature tiles; i.e tiles with No Consumables, Walls, and / or Ghosts
-                if i not in self.foodcoord and i not in self.capsulecoord and i not in self.blank_list and \
-                        i not in self.wallcoord and i not in self.ghostcoord:
-                    # Adds Blank Spaces to a list of all the Blank Space with no key features
-                    self.blank_list.append(i)
-            # Creates Hub dictionary; assign a negative reward to the hub area; to stops pacman from getting stuck
-            self.hub_dictionary = {i: self.hub for i in self.ghostHub}
-            # Create iteration space; assigns zero value to Blank Space Tiles
-            self.blank_dictionary = {i: 0 for i in self.blank_list}
-        # Adds/updates Blank Spaces to Reward dictionary
-        RewardDic.update(self.blank_dictionary)
-        # Checks size of Grid again
-        if len(self.grid) < 20:  # Small Grid
-            # Assigns negative reward to Inky; Small Grid
-            RewardDic.update(self.singleGhost(state))
-        else:  # Grid => 20 = Medium Classic
-            # Assigns negative reward to Inky and Clyde; Creates Negative Ghost Radius; Assigns Negative Integer to Food
-            RewardDic.update(self.multiGhost(state))
-            # Overrides Negative Reward when ghost in ghost starting area i.e Hub
-            RewardDic.update(self.hub_dictionary)
-            # Blank Spaces in Negative Ghost Radius + HUB will be assigned a Zero Reward IF not included in FR Dic;
-            self.Fixed_Reward_Dic.update(self.ghost_tentacles_dictionary)
-            self.Fixed_Reward_Dic.update(self.hub_dictionary)
-        # Initialising Pacman Location to zero
-        if self.pacmancoord in RewardDic.keys():
-            RewardDic[self.pacmancoord] = 0
-        return RewardDic
+        self.map = None
 
-    def singleGhost(self, state):
-        """Creates a dictionary that assigned a negative reward to the Inky's coordinates; Only used on the small grid"""
-        # Initialise Inky's Negative Reward dictionary
-        ghost_dictionary = {}
-        # Check to see if Inky is scared
-        if self.ghostStatus[0][1] == 0:  # 0 = Not Scared
-            # If TRUE; Assigns a Negative Reward to Ink's Location
-            ghost_dictionary[self.ghostStatus[0][0]] = - 1
-        return ghost_dictionary
+    # Creates and returns an initial map containing only the walls
+    def createMap(self, state):
+        map = []
+        for i in range(self.height):
+            map.append([])
+            for j in range(self.width):
+                map[i].append("  ")
 
-    def multiGhost(self, state):
-        """Creates a dictionary of negative rewards for the Clyde and Inky. Create a radius of negative rewards
-        surrounding ghosts i.e imaginary ghostly tentacles. Assigns a negative reward to food, one tile to the North,
-        South, East and West of ghost tentacle radius"""
-        # Initialises Inky and Clyde's Joint Dictionary; Imagine Inky and Clyde have ghost tentacles that infect area
-        self.ghost_tentacles_dictionary = {}
-        # Initialises Tentacle List i.e Ghost Radius; Lists are separated; in case one ghost has been eaten/respawns
-        self.tentacles_list = []
-        tentaclesClyde = []
-        tentaclesInky = []
-        # IInitialises Rotten Food List; Assigns a Negative Utility for Certain Consumables
-        rotten_food_list = []
-        rottenClyde = []
-        rottenInky = []
-        # Obtains Coordinates for Inky and Clyde
-        Ghost_Coordinates = [self.ghostStatus[0][0], self.ghostStatus[1][0]]
-        # Clyde's Ghost Tentacles; Initially checks to see if Clyde is scared; If TRUE start assigning reward
-        if self.ghostStatus[0][1] == 0:  # 0 = Scared
-            # If Clyde is scared; a negative reward is assigned its coordinate in the joint Ghost dictionary
-            self.ghost_tentacles_dictionary[self.ghostStatus[1][0]] = -10
-            # Creates a 1 tile radius surrounding Clyde; using the Corners and NSEW method; Tentacles
-            tentaclesClyde = self.corners(self.ghostStatus[1][0]) + self.NSEW(self.ghostStatus[1][0])
-            # Calls the Rotten Food method which generates a set of coordinates; one to the North, South, East and West;
-            # The Rotten food method only inc. food pellets 1 tile to the NSEW of the Ghost Radius; Not Corners
-            rottenClyde = self.rottenFood(self.ghostStatus[1][0])
-        # Inky's Ghostly Tentacles; Same as above
-        if self.ghostStatus[1][1] == 0:
-            self.ghost_tentacles_dictionary[self.ghostStatus[0][0]] = -10
-            tentaclesInky = self.corners(self.ghostStatus[0][0]) + self.NSEW(self.ghostStatus[0][0])
-            rottenInky = self.rottenFood(self.ghostStatus[0][0])
-        # Creates a joint list of the tiles 1 tile radius surrounding Clyde and Inky; Ghostly tentacles;
-        temporay_tentacles = tentaclesInky + tentaclesClyde
-        # Iterate over Tentacle List
-        for i in temporay_tentacles:
-            # Removes Tentacles/ Tiles outside of the Grid/ in Walls.
-            if i not in self.wallcoord and i in self.grid and i not in self.tentacles_list:
-                self.tentacles_list.append(i)
-        # Assigns a Negative reward to the the Negative Tentacle Radi
-        for i in self.tentacles_list:
-            # Remove Ghost location
-            if i not in Ghost_Coordinates:
-                # Assign Fixed Negative Reward
-                self.ghost_tentacles_dictionary[i] = self.tenticles
-        # Checks; Do any food pellet exist in the rotten food region; If TRUE; Assign negative reward
-        for i in rottenInky:
-            if i in self.foodcoord and i not in rotten_food_list:
-                rotten_food_list.append(i)
-        for i in rottenClyde:
-            if i in self.foodcoord and i not in rotten_food_list:
-                rotten_food_list.append(i)
-        # Check; Remove Rotten Food Locations in Ghost Tentacles; Avoids OverLap/ Over assignment
-        for i in rotten_food_list:
-            if i not in self.ghost_tentacles_dictionary:
-                self.ghost_tentacles_dictionary[i] = - 10
-        #  Returns Full Ghost Dictionary
-        return self.ghost_tentacles_dictionary
+        walls = api.walls(state)
+        for i in range(self.height):
+            for j in range(self.width):
+                if (i, j) in walls:
+                    map[i][j] = self.wallReward
+                else:
+                    map[i][j] = self.blankReward
 
-    def NSEW(self, coordinates):
-        """Creates a list of the states to the North, South, East and West of a given set of coordinates."""
-        (x, y) = coordinates
-        return [(x, y + 1), (x, y - 1), (x + 1, y), (x - 1, y), (x, y)]  # N, S, E, W, Bounce
+        return map
 
-    def corners(self, coordinates):
-        """Creates a list of the states to the NorthEast,NorthWest, SouthEast and SouthWest  of coordinates; Corners."""
-        (x, y) = coordinates
-        return [(x - 1, y + 1), (x + 1, y + 1), (x + 1, y - 1), (x - 1, y - 1)]  # NE, NW, SE, SW
+    # Creates and returns the reward map of the world
+    # reward map acts as the reward function used in Bellmann update
+    def createRewardMap(self, state):
+        # creates empty reward map - only has walls
+        rewardMap = self.createMap(state)
+        food = api.food(state)
+        capsules = api.capsules(state)
+        walls = api.walls(state)
+        ghosts = api.ghosts(state)
 
-    def rottenFood(self, coordinates):
-        """The Rotten Food method creates a list of tiles one square to the North, South East and West of the
-        negative tentacle ghost radius. Does not Include Radius itself. Only assigns negative rewards to food only not
-        tiles"""
-        RottenFood_List = [] # Intialise/Resets list after very timestep
-        # Ghost's Location is take as the argument
-        (x, y) = coordinates
-        # Generates a list of coordinates; one tile to the NSEW of ghost radius; Does not include corners
-        # Coordinates in Ghost Radius will be removed later
-        # Negative Rewards will only be assigned to Food Pellets in Rotten Food Method Range; Not Blank Spaces
-        for i in range(self.RottenFoodLength):
-            RottenFood_List.append((x, y + i))
-            RottenFood_List.append((x, y - i))
-            RottenFood_List.append((x + i, y))
-            RottenFood_List.append((x - i, y))
-        return RottenFood_List
+        # populate map with reward values for food, capsules, ghosts and empty spaces
+        for i in range(self.height):
+            for j in range(self.width):
+                if (i, j) in food:
+                    rewardMap[i][j] = self.foodReward
+                elif (i, j) in capsules:
+                    rewardMap[i][j] = self.capsuleReward
+                elif (i, j) in ghosts:
+                    rewardMap[i][j] = self.ghostReward
+                elif (i, j) in walls:
+                    rewardMap[i][j] = self.wallReward
+                else:
+                    rewardMap[i][j] = self.blankReward
 
-    def valueIteration(self, state):
-        """The Value Iteration method contains the Bellman Update which is is used for value iteration. Value iteration
-        commences on all the blank spaces on the grid ,therefore, all food pellets and ghosts are assumed to be fixed
-        states. Additionally the ghost hub and ghost radius are assumed to be fixed value state. First a coordinate is
-        passed through the NSEW method which generates the list of states, which is then used to Expected Utility of
-        a particular state; which is the maximum expected utility given that the agent has selected the optimal action;
-        Therefore the utility of a state, is equal to the highest utility of the surrounding state."""
+        return rewardMap
 
-        U = self.rewardDictionary(state) # Creates a reward dictionary;
-        delta = 0 # Initialise Delta; Used to Check Convergence Condition
-        # Creates an Infinite While loop; Continues until the convergence condition is met => Loop is broken
-        while True:
-            # Creates a Copy of the previously Rewards dictionary
-            # Creates a variable the Utility Method can access; i.e to calculate the Expected Utility of a tile using
-            # the iterated dictionary from the previous step.
-            U.update(self.blank_dictionary) # Update the New Utility Values of iterated blank space
-            self.UDic = U.copy() # Store Previous Delta values for convergence check
-            # Allows Utility Method access
-            delta_old = delta # Store Previous Delta
-            if len(self.grid) < 20:  # Small
-                for i in self.blank_dictionary.keys():  # Iterates Passes all Non-Fixed Reward States (i.e Blank Spaces)
-                    # Commences value iteration over all the Non-Fixed Reward States (i.e Blank Spaces)
-                    if i not in self.ghostcoord: # Removes Ghost = Fixed Reward State
-                        # Create a list of the neighbouring coordinate; To Calculate Expected Utility
-                        states = self.NSEW(i)
-                        # Passes list though Utility Method; Selects Maximum Utility of neibouring states;
-                        # assigns to center state in dic
-                        self.UDic[states[4]] = max(self.utilityFunction((states)))
-                        # Bellman Update; Assigns New utility value to Blank Space Dic
-                        self.blank_dictionary[i] = -0.01 + 0.6 * self.UDic[states[4]]
-                        # MAX(MIN)
-                        # self.UDic[state[4]] = min(self.utilityFunction((states)))
+    # Updates the map with values for ghosts and dangerous zones
+    def updateRewardMap(self, ghosts, map, state):
+        # Dictionary having ghost location as key, and value as timer until the ghost's edible state ends
+        edibleGhostDictionary = dict(api.ghostStatesWithTimes(state))
 
+        for ghost in ghosts:
+            # compute the danger zone for every ghost
+            dangerArea = self.getGhostArea(ghost, map)
+
+            # check if ghost is edible for long enough to make a move
+            if edibleGhostDictionary[ghost] >= 4:
+                # check if agent is near the edible ghost
+                if self.getDistanceToGhost(ghost, api.whereAmI(state)) < 5:
+                    map[int(ghost[0])][int(ghost[1])] = self.edibleGhostReward
+            # else edible state is almost finished and ghost becomes terrifying again
             else:
-                for i in self.blank_dictionary.keys():  # Iterates over all Blank Space states
-                    if i not in self.Fixed_Reward_Dic.keys() and i not in self.ghostcoord:
-                        # Only non - Fixed Reward States i.e Blank Spaces; The Ghost Radius is considered a
-                        # Fixed Value. The blank space dictionary contains all the blank spaces inc. ones in the
-                        # negative ghost radius, therefore,the negative radial rewards will be iterated over if not
-                        # removed from the iteration space.
-                        # A list of states surrounding a blank space state is obtained via the NSEW Method;
-                        states = self.NSEW(i)
-                        # The NSEW and Centre states are passed through the Utility Function; Which Generates a list
-                        # containing the Utility of the neighbouring spaces
-                        # Maximum Utility neighbouring states is obtained; assigns to the centre state.
-                        self.UDic[states[4]] = max(self.utilityFunction((states)))
-                        # Bellman Update; Assigns New utility value to Blank Space Dic
-                        self.blank_dictionary[i] = -0.01 + 0.8 * self.UDic[states[4]]
-            # Call convergence method; to check for convergence based on summation of dic utilities and rewards
-            delta = self.convergence(self.UDic) - self.convergence(U)
-            # If the utilities have converged; the while loop is broken; and the iterated reward dic is returned.
-            if delta == delta_old:
-                return U
+                # update danger locations in utility map according to position of ghosts
+                for pos in dangerArea:
+                    if pos == ghost:
+                        map[int(pos[0])][int(pos[1])] = self.ghostReward
+                    else:
+                        map[int(pos[0])][int(pos[1])] = self.dangerZoneReward
 
-    def convergence(self, Utls):
-        """The Convergence method check to see if the utilities in the iterated utility dictionary have converged."""
-        utls = []
-        for i in Utls.values():
-            if i not in utls:
-                utls.append(i)
-        return sum(utls)
+    # Computes distance between the two ghosts using Euclidean distance
+    def getDistanceBetweenGhosts(self, state):
+        ghosts = api.ghosts(state)
+        ghost1 = ghosts[0]
+        ghost2 = ghosts[1]
+        return math.sqrt(math.pow(ghost1[0] - ghost2[0], 2) + math.pow(ghost1[1] - ghost2[1], 2))
 
-    def utilityFunction(self, NSEWstates):
-        """Calculates the utility of a state using the stocastic motion model"""
-        # Creates a list to store states; if a state is in the wall it is reassigned the center state coordinate
-        state = []  # n', 's', 'e', 'w'
-        # Iterate over 4 states generated by NSEW Method; N, S, E, W and Bounce i.e Center Coordinate
-        for i in range(4):
-            # Checks to see if the coordinates are in a wall
-            if NSEWstates[i] in self.wallcoord:
-                # If a coordinate is in a wall; Pick center coordinate
-                state.append(NSEWstates[4])
-            else: # IF NOT; coordinate remains the same
-                state.append(NSEWstates[i])
-        # Next using the set of coordinates the corresponding utilities are calculated using the transition model
-        n_val = (0.8 * self.UDic[state[0]]) + (0.1 * self.UDic[state[2]]) + (0.1 * self.UDic[state[3]])
-        s_val = (0.8 * self.UDic[state[1]]) + (0.1 * self.UDic[state[2]]) + (0.1 * self.UDic[state[3]])
-        e_val = (0.8 * self.UDic[state[2]]) + (0.1 * self.UDic[state[0]]) + (0.1 * self.UDic[state[1]])
-        w_val = (0.8 * self.UDic[state[3]]) + (0.1 * self.UDic[state[0]]) + (0.1 * self.UDic[state[1]])
-        # Generates a list of utilities
-        return [n_val, s_val, e_val, w_val]
+    # Computes distance between agent and given ghost using Euclidean distance
+    def getDistanceToGhost(self, ghost, pacman):
+        return math.sqrt(math.pow(pacman[0] - ghost[0], 2) + math.pow(pacman[1] - ghost[1], 2))
+
+    # Determine dangerous area for a ghost
+    # It is defined as a 2 rows x 3 columns matrix with the next possible cells for a given direction
+    def getGhostArea(self, ghost, rewardMap):
+        dangerCoordinates = set()
+        dangerCoordinates.add((int(ghost[0]), int(ghost[1])))
+
+        # define danger area - ghost can move up, down, east, west
+        # if a ghost can go up, the up, up-right and up-left become dangerous locations
+        # if the ghost can go up once more, the next up, next up-right and next up-left become dangerous locations
+
+        # if ghost can go up (there is no wall)
+        if rewardMap[int(ghost[0])][int(ghost[1]) + 1] != self.wallReward:
+            dangerCoordinates.add((int(ghost[0]), int(ghost[1]) + 1))
+            # add right and left up cells to danger locations if there are no walls
+            try:
+                if rewardMap[int(ghost[0]) + 1][int(ghost[1]) + 1] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) + 1][int(ghost[1]) + 1]))
+            except:
+                pass
+            try:
+                if rewardMap[int(ghost[0]) - 1][int(ghost[1]) + 1] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) - 1][int(ghost[1]) + 1]))
+            except:
+                pass
+
+            try:
+                # if possible add next up location of the ghost to the danger locations
+                if rewardMap[int(ghost[0])][int(ghost[1]) + 2] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0])][int(ghost[1]) + 2]))
+            except:
+                pass
+            # add next right and left up locations to danger locations if there is no wall
+            try:
+                if rewardMap[int(ghost[0]) + 1][int(ghost[1]) + 2] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) + 1][int(ghost[1]) + 2]))
+            except:
+                pass
+            try:
+                if rewardMap[int(ghost[0]) - 1][int(ghost[1]) + 2] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) - 1][int(ghost[1]) + 2]))
+            except:
+                pass
+
+        # if ghost can go down
+        if rewardMap[int(ghost[0])][int(ghost[1]) - 1] != self.wallReward:
+            dangerCoordinates.add((int(ghost[0]), int(ghost[1]) - 1))
+            # add right and left down cells to danger locations if there are no walls
+            try:
+                if rewardMap[int(ghost[0]) + 1][int(ghost[1]) - 1] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) + 1][int(ghost[1]) - 1]))
+            except:
+                pass
+            try:
+                if rewardMap[int(ghost[0]) - 1][int(ghost[1]) - 1] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) - 1][int(ghost[1]) - 1]))
+            except:
+                pass
+
+            try:
+                # if possible add next up location of the ghost to the danger locations
+                if rewardMap[int(ghost[0])][int(ghost[1]) - 2] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0])][int(ghost[1]) - 2]))
+            except:
+                pass
+            # add next right and left up locations to danger locations if there are no walls
+            try:
+                if rewardMap[int(ghost[0]) + 1][int(ghost[1]) - 2] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) + 1][int(ghost[1]) - 2]))
+            except:
+                pass
+            try:
+                if rewardMap[int(ghost[0]) - 1][int(ghost[1]) - 2] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) - 1][int(ghost[1]) - 2]))
+            except:
+                pass
+
+        # if ghost can go right
+        if rewardMap[int(ghost[0]) + 1][int(ghost[1])] != self.wallReward:
+            dangerCoordinates.add((int(ghost[0] + 1), int(ghost[1])))
+            # add up and down right cells to danger locations if there are no walls
+            try:
+                if rewardMap[int(ghost[0]) + 1][int(ghost[1]) + 1] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) + 1][int(ghost[1]) + 1]))
+            except:
+                pass
+            try:
+                if rewardMap[int(ghost[0]) + 1][int(ghost[1]) - 1] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) + 1][int(ghost[1]) - 1]))
+            except:
+                pass
+
+            try:
+                # if possible add next right location of the ghost to the danger locations
+                if rewardMap[int(ghost[0]) + 2][int(ghost[1])] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) + 2][int(ghost[1])]))
+            except:
+                pass
+            # add next up and down right locations to danger locations if there are no walls
+            try:
+                if rewardMap[int(ghost[0]) + 2][int(ghost[1]) + 1] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) + 2][int(ghost[1]) + 1]))
+            except:
+                pass
+            try:
+                if rewardMap[int(ghost[0]) + 2][int(ghost[1]) - 1] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) + 2][int(ghost[1]) - 1]))
+            except:
+                pass
+
+        # if ghost can go left
+        if rewardMap[int(ghost[0]) - 1][int(ghost[1])] != self.wallReward:
+            dangerCoordinates.add((int(ghost[0] - 1), int(ghost[1])))
+            # add up and down left cells to danger locations if there are no walls
+            try:
+                if rewardMap[int(ghost[0]) - 1][int(ghost[1]) + 1] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) - 1][int(ghost[1]) + 1]))
+            except:
+                pass
+            try:
+                if rewardMap[int(ghost[0]) - 1][int(ghost[1]) - 1] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) - 1][int(ghost[1]) - 1]))
+            except:
+                pass
+
+            try:
+                # if possible add next left location of the ghost to the danger locations
+                if rewardMap[int(ghost[0]) - 2][int(ghost[1])] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) - 2][int(ghost[1])]))
+            except:
+                pass
+            # add next up and down left locations to danger locations if there are no walls
+            try:
+                if rewardMap[int(ghost[0]) - 2][int(ghost[1]) + 1] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) - 2][int(ghost[1]) + 1]))
+            except:
+                pass
+            try:
+                if rewardMap[int(ghost[0]) - 2][int(ghost[1]) - 1] != self.wallReward:
+                    dangerCoordinates.add(([int(ghost[0]) - 2][int(ghost[1]) - 1]))
+            except:
+                pass
+
+        return dangerCoordinates
+
+    # Computes and returns the updated value of a cell using the Bellman equation.
+    def bellmann(self, utilityMap, cell, cellRewardValue):
+        x = cell[0]
+        y = cell[1]
+
+        if cellRewardValue == self.wallReward:
+            return self.wallReward
+
+        east = west = north = south = None
+        currentReward = utilityMap[x][y]
+
+        # checks if agent can go to the adjacent cells and retrieve their utility
+        if x < self.width - 1:
+            east = utilityMap[x + 1][y]
+        if x > 0:
+            west = utilityMap[x - 1][y]
+        if y < self.height - 1:
+            north = utilityMap[x][y + 1]
+        if y > 0:
+            south = utilityMap[x][y - 1]
+
+        # if adjacent cell is wall, discard chances of going in that direction
+        if east is None:
+            east = -1
+        if west is None:
+            west = -1
+        if north is None:
+            north = -1
+        if south is None:
+            south = -1
+
+        # compute probabilities of going in each direction
+        if north is not None:  # no wall
+            north_val = north * 0.8 + (east + west) * 0.1
+        else:
+            north_val = currentReward * 0.8 + (east + west) * 0.1
+
+        if south is not None:
+            south_val = south * 0.8 + (east + west) * 0.1
+        else:
+            south_val = currentReward * 0.8 + (east + west) * 0.1
+
+        if east is not None:
+            east_val = east * 0.8 + (north + south) * 0.1
+        else:
+            east_val = currentReward * 0.8 + (north + south) * 0.1
+
+        if west is not None:
+            west_val = west * 0.8 + (north + south) * 0.1
+        else:
+            west_val = currentReward * 0.8 + (north + south)
+
+        # take max utility for a direction and compute the new utility value
+        max_val = max([north_val, south_val, east_val, west_val])
+        return float(float(cellRewardValue) + float(self.discountFactor) * float(max_val))
+
+    # Apply value iteration algorithm on the given map
+    # Returns the expected utility map
+    def valueIteration(self, utilityMap, state):
+        ghosts = api.ghosts(state)
+        epsilon = 0.001
+
+        # reward map - acting as the reward function having the reward value for each cell
+        rewardMap = self.createRewardMap(state)
+        self.updateRewardMap(ghosts, rewardMap, state)
+
+        while True:
+            Ucopy = self.createMap(state)  # only has walls
+            delta = 0
+
+            # for evry state, computes utility value for that cell using bellman equation
+            for i in range(self.height):
+                for j in range(self.width):
+                    r = rewardMap[i][j]
+                    Ucopy[i][j] = self.bellmann(utilityMap, (i, j), r)
+                    try:
+                        delta = max(delta, abs(Ucopy[i][j] - utilityMap[i][j]))
+                    except:
+                        pass
+            utilityMap = Ucopy
+
+            # checks for convergence
+            # stops once the value function changes by only a small amount
+            if delta < epsilon * (1 - self.discountFactor) / self.discountFactor:
+                return utilityMap
+
+    # Maps the value of a cell to an action (direction of action)
+    def getActionUtility(self, legal, pacman_map, x, y):
+        # dictionary having action as key and utility of the action as value
+        toReturn = dict()
+        for action in legal:
+            value = None
+            if action is Directions.NORTH:
+                value = pacman_map[x][y + 1]
+            elif action is Directions.SOUTH:
+                value = pacman_map[x][y - 1]
+            elif action is Directions.EAST:
+                value = pacman_map[x + 1][y]
+            elif action is Directions.WEST:
+                value = pacman_map[x - 1][y]
+            if value is not None:
+                toReturn[action] = value
+
+        return toReturn
 
     def getAction(self, state):
-        self.UDic ={}
-        # Obtain information about the environment
-        self.wallcoord = api.walls(state)
-        self.foodcoord = api.food(state)
-        self.capsulecoord = api.capsules(state)
-        self.ghostcoord = api.ghosts(state)
-        self.ghostStatus = api.ghostStates(state)
-        self.pacmancoord = api.whereAmI(state)
-        # Obtain List of Legal Actions
+        # Get the actions we can try, and remove "STOP" if that is one of them.
         legal = api.legalActions(state)
-        # Build Grid
-        self.gridBuilder(state)
-        # Calls value iteration Method; which Generates an iterated Rewards dic; Resets variable to iterated dic
-        self.UDic = self.valueIteration(state) # = iterated Utilities Dictionary
-        # Maximum Expected Utility i.e Pol Selection
-        # Generate a list of utilities of the states surrounding Pacman using the iterated reward dictionary
-        values = self.utilityFunction(self.NSEW(api.whereAmI(state)))
-        # Obtains Maximum Expected Utility from list generated via Utility Function
-        MEU = max(values)
-        # Obtains Index for MEU
-        Index = values.index(MEU)
         if Directions.STOP in legal:
             legal.remove(Directions.STOP)
-        # Pacman chooses optimal policy using Max/Max Regime
-        for i in range(len(self.NSEW_Direct)):
-            if self.NSEW_Direct[Index] == self.NSEW_Direct[i]:
 
-                return api.makeMove(self.NSEW_Direct[i], legal)
+        # get agent current location
+        pacman = api.whereAmI(state)
 
+        # value iteration algorithm on the initial empty map
+        self.map = self.valueIteration(self.map, state)
+
+        # computes max utility and make the corresponding action
+        actionUtilityDictionary = self.getActionUtility(legal, self.map, pacman[0], pacman[1])
+        all_values = actionUtilityDictionary.values()
+        max_value = max(all_values)
+        action = actionUtilityDictionary.keys()[actionUtilityDictionary.values().index(max_value)]
+
+        return api.makeMove(action, legal)
