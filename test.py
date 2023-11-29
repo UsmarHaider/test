@@ -1,4 +1,4 @@
-# mdpAgents.py
+# mapAgent.py
 # parsons/20-nov-2017
 #
 # Version 1
@@ -31,42 +31,27 @@
 from pacman import Directions
 from game import Agent
 import api
-import math
-import random
-import game
-import time
 
-INITIAL_REWARD = 0.01
-INITIAL_REWARD_FOOD = 1.8
-INITIAL_REWARD_CAPSULE = 2.0
-DIRECTIONS = [Directions.NORTH, Directions.SOUTH, Directions.WEST, Directions.EAST]
-ITERATION_THRESHOLD = 0.00001
 
-#
-# A class that creates a grid that can be used as a map
+# Creates a grid that can be used as a map: 2D array
 #
 # The map itself is implemented as a nested list, and the interface
 # allows it to be accessed by specifying x, y locations.
 #
+# This class is used for visualization and debugging purpose
+#
+# This class 'Grid' is copied from Practical 05: sample solution ---- mapAgents.py
 class Grid:
-         
+
     # Constructor
-    #
-    # Note that it creates variables:
-    #
-    # grid:   an array that has one position for each element in the grid.
-    # width:  the width of the grid
-    # height: the height of the grid
-    #
-    # Grid elements are not restricted, so you can place whatever you
-    # like at each location. You just have to be careful how you
-    # handle the elements when you use them.
+    # width: number of columns
+    # height: number of rows
     def __init__(self, width, height):
         self.width = width
         self.height = height
         subgrid = []
         for i in range(self.height):
-            row=[]
+            row = []
             for j in range(self.width):
                 row.append(0)
             subgrid.append(row)
@@ -74,54 +59,36 @@ class Grid:
         self.grid = subgrid
 
     # Print the grid out.
-    def display(self):       
+    def display(self):
         for i in range(self.height):
             for j in range(self.width):
                 # print grid elements with no newline
-                print self.grid[i][j], '\t',
+                print self.grid[i][j],
             # A new line after each line of the grid
-            print 
-        # A line after the grid
+            print
+            # A line after the grid
         print
 
     # The display function prints the grid out upside down. This
     # prints the grid out so that it matches the view we see when we
     # look at Pacman.
-    def prettyDisplay(self):       
+    def prettyDisplay(self):
         for i in range(self.height):
             for j in range(self.width):
                 # print grid elements with no newline
-                print self.grid[self.height - (i + 1)][j],  '\t',
+                print self.grid[self.height - (i + 1)][j],
             # A new line after each line of the grid
-            print 
-        # A line after the grid
+            print
+            # A line after the grid
         print
-        
+
     # Set and get the values of specific elements in the grid.
     # Here x and y are indices.
     def setValue(self, x, y, value):
         self.grid[y][x] = value
 
-    # set all values from the grid to the same number
-    def setAllValue(self, value):
-        for i in range(self.height):
-            for j in range(self.width):
-                self.grid[i][j] = value
-
-    # get value at location (x, y) from the grid
-    # if the location value does not exist on grid
-    # then 0 is returned
     def getValue(self, x, y):
-        value = 0
-        try:
-            # get value from the left of the state
-            y = int(y)
-            x = int(x)
-            value = self.grid[y][x]
-        except:
-            value = '%'
-            print "Position", x, ",", y, "does not exist"
-        return value
+        return self.grid[y][x]
 
     # Return width and height to support functions that manipulate the
     # values stored in the grid.
@@ -133,108 +100,523 @@ class Grid:
 
 
 class MDPAgent(Agent):
+    """
+        README:
+        To get the best performance, initial rewards are fine tuned for small grid and medium grid.
+        During the game, rewards will dynamically change based on the game state:
+            a. Food reward suppression: If a piece of food is surrounded by 2 or 3 walls, the reward of
+                this piece will be suppressed; food at a crossing will get a higher reward because it gives pacman
+                more options to move.
+            b. Terminal state reward boosting: The reward of the last piece of food will be boosted so that pacman
+                will try to get to it and finish the game as quick as possible, so that no time will be wasted.
+            c. Ghost reward radiation: In order to encourage Pacman to avoid ghost and improve win rate, negative
+                reward of ghost will be radiated to its neighbours to a certain distance. The effect of radiation
+                will decrease as distance increases. Similar things happen when ghost is scared.
+            d. Chasing ghost: When Pacman eats a capsule, the reward of ghost will be boosted to attract Pacman.
+                Pacman will calculate the distance between scaring ghost and itself, as well as their remaining
+                scaring time. If distance/time is less than a threshold, the reward (+) of scared ghost will be
+                boosted and radiated to neighbour cells. The threshold indicates the willingness of Pacman to boost
+                reward. It is also fine tuned.
+    """
 
-
-    # Constructor 
-    #
-    # Note that it creates variables including:
-    #
-    # initial_reward: an reward assigned when ever pacman stays on the map
-    # food_reward: reward added to the location that contains food
-    # capsule_reward: reward added to the location that contains capsule
-    # edible_ghost_reward: reward added to the location that has an edible/scared ghost
-    # ghost_reward: a negative reward for location that has an active ghost
-    #
-    # discount_factor: a number between 0 and 1 that decides 
-    # the preference of the agent for current over future rewards
-    #
-    # iteration_threshold: when the change in values is below this iteration threshold, 
-    # stop the iteration
-    #
-    # self.total_food_num: variable for total number of food on map
-    #
-    # Grid elements are not restricted, so you can place whatever you
-    # like at each location. You just have to be careful how you
-    # handle the elements when you use them.
-    #
-    # this gets run when we first invoke pacman.py
+    # Constructor: this gets run when we first invoke pacman.py
     def __init__(self):
+        """
+            All maps (game map, states, reward map and utility map), parameters (reward), hyper-parameters (gamma,
+            factors, errors, breadth, etc.) and  are declared here.
 
-        # time the program for testing
-        self.start_time = time.time()
+            Notice, here we only declare variables without assigning values to them. They will be initialized
+            and updated dynamically when the game starts running.
+        """
+
         print "Starting up MDPAgent!"
-        name = "Pacman"
 
-        # assign reward values
-        # an reward assigned when ever pacman stays on the map
-        self.initial_reward=INITIAL_REWARD
-        self.food_reward=INITIAL_REWARD_FOOD
-        self.capsule_reward=INITIAL_REWARD_CAPSULE
-        self.edible_ghost_reward=3.0
-        self.ghost_reward=-4
+        # Maps:
+        self.map = None                               # Grid: stores symbols of each cell, for visualization
+        self.rewardMap = None                         # Grid: stores the reward of each state, for visualization
+        self.utilityMap = None                        # Grid: stores utility of each state, for visualization
+        self.grid = set()                             # a set of all possible states in the game
+        self.mappedStates = {}                        # a dict mapping all possible states to 4 directions
+        self.reward = {}                              # a dict which stores reward of each cell
+        self.utils = {}                               # a dict which stores utility of each cell
 
-        # assign discount factor
-        self.discount_factor=0.8
+        # Hyper-parameters:
+        self.width = 0                                # width of the game map
+        self.height = 0                               # height of the game map
+        self.error = 0.001                            # error for convergence of value iteration
+        self.gamma = 0.9                              # discount factor
+        self.catchable_threshold = 2                  # threshold: pacman-ghost distance / scaring time
+        self.actionProb = api.directionProb           # non-deterministic probability of policy: 0.8
+        self.otherActionProb = (1-self.actionProb)/2  # 0.1
+        self.breadth = 0                              # reward radiation distance, i.e., breadth in BFS
+        self.scaringGhost_reward_factor = 0           # scaring-ghost-reward boosting factor
 
-        # assign iteration threshold
-        self.iteration_threshold=ITERATION_THRESHOLD
+        # Parameters / Reward:
+        self.food_reward = 0                          # Food reward
+        self.ghost_reward = 0                         # Ghost reward
+        self.scaringGhost_reward = 0                  # Scaring ghost reward
+        self.capsule_reward = 0                       # Capsule reward
+        self.empty_reward = 0                         # Empty cell reward
 
-        # variable for total number of food on map
-        self.total_food_num=0
-
-    # The function gets run after an MDPAgent object is created and once there is
+    # Gets run after an MDPAgent object is created and once there is
     # game state to access.
     def registerInitialState(self, state):
-        print "Running register InitialState for MDPAgent!"
-        print "I'm at:"
-        print api.whereAmI(state)
+        print "Running registerInitialState for MDPAgent!"
+        # 1. Create a set of all states of the game                         -> self.grid
+        self.makeGrid(state)
+        # 2. Initialize rewards values based on the size of the map         -> self.xxx_reward and hyper-parameters
+        self.initializeReward(state)
+        # 3. Initialize rewards of each state (except for walls)            -> self.reward (dict)
+        self.updateReward(state)
+        # 4. Initialize all grids' utility to 0                             -> self.utility (dict)
+        self.resetUtility(state)
+        # 5. Map Pacman's all possible states to its 4 adjacent directions  -> self.mappedStates
+        self.mapState(state)
+        # 6. Create Grid instances for printing and visualization           -> self.map/self.rewardMap/self.utilityMap
+        self.makeMap(state)
 
-        # initialise reward value at the start of each run
-        self.food_reward=INITIAL_REWARD_FOOD
-        self.capsule_reward=INITIAL_REWARD_CAPSULE
-
-        # Make a map of the right size for utlity values
-        self.utility_map = self.makeMap(state, initial_value=INITIAL_REWARD)
-        self.addWallsToMap(state, self.utility_map)
-        self.updateFoodInMap(state, self.utility_map)
-        self.updateGhostInMap(state, self.utility_map)
-
-        # Make a map of the right size for 
-        # direction that gives maximum utility value
-        self.direction_map = self.makeMap(state, initial_value="")
-        self.addWallsToMap(state, self.direction_map)
-
-        # get the total (initial) number of food from the map
-        self.total_food_num = len(api.food(state))
-        
-    # The function gets run in between multiple games
+    # This is what gets run in between multiple games
     def final(self, state):
         print "Looks like the game just ended!"
 
-        # display time for testing
-        print"--- ", round((time.time() - self.start_time), 2), " seconds ---"
-        print "final food reward = ", self.food_reward
+    def getAction(self, state):
+        # 1. Update rewards for each cell at the beginning of every round
+        self.updateReward(state)
+        # 2. Reset utility for each cell to 0
+        self.resetUtility(state)
+        # 3. Value iteration
+        self.valueIteration(state)
+        # 4. Update pacman position, reward map and utility map only for printing and visualization
+        self.updateMap(state)
 
-    # Function that makes a map by creating a grid of the right size
-    # 
-    # an initial value can be assigned to all cells 
-    # using the optional parameter 'initial_value'
-    def makeMap(self, state, initial_value=INITIAL_REWARD):
+        # Print out game map, reward map and utility map for debugging
+        # print "Map: "
+        # self.map.prettyDisplay()
+        # print "Reward Map: "
+        # self.rewardMap.prettyDisplay()
+        # print "Utility Map: "
+        # self.utilityMap.prettyDisplay()
+
+        # 5. Choose a policy that maximize the expected utility
+        policy = self.choosePolicy(state)
+        legal = api.legalActions(state)
+        if Directions.STOP in legal:
+            legal.remove(Directions.STOP)
+        return api.makeMove(policy, legal)
+
+    def valueIteration(self, state):
+        """ Do value iteration for each cell until delta is less than self.error, i.e. until converge """
+
+        states = self.mappedStates      # transition model/dict
+        reward = self.reward            # reward dictionary
+        utils = self.utils              # utility dictionary
+        prevUtils = dict(utils)         # keep a record of previous utility dictionary
+
+        # each loop is one round of value iteration
+        while True:
+            delta = 0
+            # for every cell in the game map, calculate the maximum expected utility
+            # coord: utility's map coordinate
+            # utility: utility value
+            for coord, utility in prevUtils.items():
+                # A temporary utility list for 4 directions
+                tempUtils = []
+                currentGridReward = reward[coord]
+                # for each coordinate/state, there are 4 possible move directions
+                # potentialGrids: 3 potential grids that one direction can lead to,
+                # potentialGrids[0] is the main direction; potentialGrids[1] and potentialGrids[2] are left and right...
+                for _, potentialGrids in states[coord].items():
+                    tempUtils.append(currentGridReward + self.gamma * (
+                            self.actionProb * prevUtils[potentialGrids[0]] + self.otherActionProb *
+                            prevUtils[potentialGrids[1]] + self.otherActionProb * prevUtils[potentialGrids[2]]))
+                utils[coord] = max(tempUtils)
+                delta = max(delta, abs(utils[coord] - utility))
+            prevUtils = dict(utils)
+            if delta < self.error:
+                # if the biggest delta is smaller than error, then break
+                self.utils = dict(utils)
+                break
+
+    def checkLastFood(self, state):
+        """ check if there is only one piece of food """
+
+        foods = api.food(state)
+        if len(foods) == 1:
+            return True
+        else:
+            return False
+
+    def choosePolicy(self, state):
+        # choose a direction which returns a maximum expected utility
+        pacman = api.whereAmI(state)
+        (x, y) = pacman
+        walls = api.walls(state)
+        north = (x, y+1)
+        south = (x, y-1)
+        east = (x+1, y)
+        west = (x-1, y)
+
+        # check if the next location is a wall, if its a wall, stop; otherwise, go
+        if north in walls:
+            north = pacman
+        if south in walls:
+            south = pacman
+        if east in walls:
+            east = pacman
+        if west in walls:
+            west = pacman
+
+        # calculate expected utility without reward, since reward is the same
+        North_EU = self.actionProb * self.utils[north] + \
+                   self.otherActionProb * self.utils[west] + \
+                   self.otherActionProb * self.utils[east]
+        South_EU = self.actionProb * self.utils[south] + \
+                   self.otherActionProb * self.utils[west] + \
+                   self.otherActionProb * self.utils[east]
+        East_EU = self.actionProb * self.utils[east] + \
+                  self.otherActionProb * self.utils[north] + \
+                  self.otherActionProb * self.utils[south]
+        West_EU = self.actionProb * self.utils[west] + \
+                  self.otherActionProb * self.utils[north] + \
+                  self.otherActionProb * self.utils[south]
+
+        # get the index of max expected utility
+        list = [North_EU, South_EU, East_EU, West_EU]
+        maxIndex = 0
+        for i in range(len(list)):
+            if list[i] > list[maxIndex]:
+                maxIndex = i
+
+        # return direction: 0-north  1-south  2-east  3-west
+        if maxIndex == 0:
+            return Directions.NORTH
+        if maxIndex == 1:
+            return Directions.SOUTH
+        if maxIndex == 2:
+            return Directions.EAST
+        if maxIndex == 3:
+            return Directions.WEST
+
+    def initializeReward(self, state):
+        """ Initialize reward for every state. Reward are fine tuned according to the size of the map """
+
+        if self.width + self.height < 20:
+            # smallGrid:
+            self.food_reward = 11
+            self.ghost_reward = -25
+            self.scaringGhost_reward = 8
+            self.capsule_reward = 9
+            self.empty_reward = -1
+            self.breadth = 17
+        else:
+            # mediumClassic
+            self.food_reward = 5
+            self.ghost_reward = -25
+            self.scaringGhost_reward = 4
+            self.scaringGhost_reward_factor = 3
+            self.capsule_reward = 8
+            self.empty_reward = -2
+            self.breadth = 5
+
+    def updateReward(self, state):
+        """
+            Update reward for every cell that is not a wall.
+            Food reward: food reward will be set differently based on the number of surrounded walls, e.g. food in the
+                corners will assigned lower value than those at a crossing. Additionally, we will boost the reward of
+                the last piece of food since it's the terminal state of the game.
+            Ghost reward: scared ghost has positive reward while normal/brave ghost has positive reward. When Pacman eats
+                a capsule, ghost will be scared and has positive reward. If Pacman thinks ghost can be caught within
+                ghost's scaring time, it will boost their reward. Otherwise just normal scared ghost reward.
+            Reward of ghost will be radiated to neighbour cells.
+        """
+
+        walls = api.walls(state)
+        foods = api.food(state)
+        capsules = api.capsules(state)
+        ghostsStates = api.ghostStatesWithTimes(state)
+
+        # Empty reward
+        self.reward = {state: -1 for state in self.grid if state not in walls}
+        # Food reward
+        for food in foods:
+            count = self.countWalls(state, food)
+            if count <= 2:
+                # If the food is only surrounded by 2 or less than 2 walls, just set the reward for this food
+                self.reward[food] = self.food_reward
+            else:
+                # If the food is only surrounded by greater than 2 walls, suppress the reward for this food
+                self.reward[food] = self.food_reward / (1 + count * count)
+        if self.checkLastFood(state):
+            self.reward[foods[0]] += self.food_reward
+        # Capsule reward
+        self.reward.update({state: self.capsule_reward for state in self.reward.keys() if state in capsules})
+
+        # Firstly set the reward for scared ghost, then set the reward for brave ghost, so that positive reward won't
+        # overlap negative reward
+        scaredGhost = []
+        braveGhost = []
+        for ghost in ghostsStates:
+            if ghost[1] > 1:
+                scaredGhost.append(ghost)
+            else:
+                braveGhost.append(ghost)
+
+        # Set reward for scared ghost
+        for ghost in scaredGhost:
+            # cast ghost coordinate to integers
+            ghost_coord = (int(round(ghost[0][0])), int(round(ghost[0][1])))
+            if ghost_coord in self.reward.keys():
+                if ghost[1] > 0:
+                    distance = self.distance(state, api.whereAmI(state), ghost[0])  # distance from pacman to ghost
+                    time = ghost[1]     # remaining scared time
+                    if self.reachable(state, distance, time):
+                        # if pacman thinks he can catch ghost before the ghost turns to normal,
+                        # we will boost the reward of scaring ghost
+                        self.reward[ghost_coord] = self.scaringGhost_reward * self.scaringGhost_reward_factor
+                        # radiate boosted reward to ghost's neighbours to encourage pacman to catch ghost
+                        self.radiate_reward(state, ghost_coord, self.breadth)
+                    else:
+                        self.reward[ghost_coord] = self.scaringGhost_reward
+
+        # Set reward for brave ghost
+        for ghost in braveGhost:
+            # cast ghost coordinate to integers
+            ghost_coord = (int(round(ghost[0][0])), int(round(ghost[0][1])))
+            if ghost_coord in self.reward.keys():
+                if ghost[1] == 0:
+                    self.reward[ghost_coord] = self.ghost_reward
+                    # radiate this reward to keep pacman away from it
+                    self.radiate_reward(state, ghost_coord, self.breadth)
+
+    def countWalls(self, state, food):
+        """ Count the number of walls that near a piece of food """
+
+        walls = api.walls(state)
+        north = (food[0], food[1] + 1)
+        south = (food[0], food[1] - 1)
+        west = (food[0] + 1, food[1])
+        east = (food[0] - 1, food[1])
+        count = 0
+        if north in walls:
+            count += 1
+        if south in walls:
+            count += 1
+        if west in walls:
+            count += 1
+        if east in walls:
+            count += 1
+        return count
+
+    def bfs_neighbours(self, state, origin, breadth):
+        """
+            Based of BFS, categorise neighbour cells based on their distance to the origin.
+            A list is used to store neighbour cells' coordinate, and index is their distance to the origin
+        """
+
+        walls = api.walls(state)
+        states = self.reward.keys()
+        neighbours = [[]]
+        queue = []
+        visit = set()
+        for i in range(breadth):
+            neighbours.append([])
+        queue.insert(0, origin)
+        visit.add(origin)
+        for i in range(1, breadth+1, 1):
+            size = len(queue)
+            for j in range(size):
+                # expand nodes in 4 directions
+                state = queue.pop()
+                north = (state[0], state[1] + 1)
+                south = (state[0], state[1] - 1)
+                west = (state[0] - 1, state[1])
+                east = (state[0] + 1, state[1])
+                if north in states and north not in walls and north not in visit:
+                    neighbours[i].append(north)
+                    queue.insert(0, north)
+                    visit.add(north)
+                if south in states and south not in walls and south not in visit:
+                    neighbours[i].append(south)
+                    queue.insert(0, south)
+                    visit.add(south)
+                if west in states and west not in walls and west not in visit:
+                    neighbours[i].append(west)
+                    queue.insert(0, west)
+                    visit.add(west)
+                if east in states and east not in walls and east not in visit:
+                    neighbours[i].append(east)
+                    queue.insert(0, east)
+                    visit.add(east)
+        return neighbours
+
+    def radiate_reward(self, state, origin, distance):
+        """ Radiate a cell's reward to certain distance. The reward will decrease along the way. """
+
+        # Cast coordinate to integer numbers
+        origin = (int(round(origin[0])), int(round(origin[1])))
+        # Get all neighbours within a certain distance
+        neighbours = self.bfs_neighbours(state, origin, distance)
+        # Decrease delta is based on the rediate distance
+        delta = self.reward[origin] * 1.0 / distance
+        for i in range(1, distance+1, 1):
+            for state in neighbours[i]:
+                # Reward will decrease 1 'delta' as distance increase 1 cell
+                new_reward = self.reward[origin] - i * delta
+                self.reward[state] += new_reward
+
+    def distance(self, state, origin, target):
+        """
+            Based on BFS searching algorithm, calculate the distance between origin and target.
+            If origin or target is wall, return -1; If there is no path from origin to target, return -1.
+        """
+
+        walls = api.walls(state)
+        if origin in walls or target in walls:
+            return -1
+        states = self.reward.keys()
+        queue = []
+        visit = set()
+        distance = 0
+        queue.insert(0, origin)
+        visit.add(origin)
+        while len(queue) > 0:
+            distance += 1
+            size = len(queue)
+            for i in range(size):
+                # expand
+                state = queue.pop()
+                north = (state[0], state[1] + 1)
+                south = (state[0], state[1] - 1)
+                west = (state[0] - 1, state[1])
+                east = (state[0] + 1, state[1])
+                if north == target or south == target or west == target or east == target:
+                    return distance
+                if north in states and north not in walls and north not in visit:
+                    queue.insert(0, north)
+                    visit.add(north)
+                if south in states and south not in walls and south not in visit:
+                    queue.insert(0, south)
+                    visit.add(south)
+                if west in states and west not in walls and west not in visit:
+                    queue.insert(0, west)
+                    visit.add(west)
+                if east in states and east not in walls and east not in visit:
+                    queue.insert(0, east)
+                    visit.add(east)
+        return -1
+
+    def reachable(self, state, distance, time):
+        """
+            If the quotient of distance and time is less than a threshold, return true; otherwise return false.
+            This threshold will determine whether to boost the reward of scared ghost, and therefore affect the
+            willingness of pacman to chase the scared ghost.
+        """
+
+        if (distance * 1.0) / time < self.catchable_threshold:
+            return True
+        else:
+            return False
+
+    def resetUtility(self, state):
+        """ Initialize all cells' utility to 0 """
+
+        walls = api.walls(state)
+        self.utils = {state: 0 for state in self.grid if state not in walls}
+
+    def mapState(self, state):
+        """ # Map reachable states for 4 directions of all states """
+
+        walls = api.walls(state)
+        states = dict.fromkeys(self.reward.keys())
+
+        # Iterate all cells in the map and map their potential states in 4 directions.
+        for cell in states.keys():
+            neighbours = self.fourNeighbours(cell)
+            states[cell] = {'north': [neighbours[3], neighbours[0], neighbours[2]],
+                            'south': [neighbours[1], neighbours[0], neighbours[2]],
+                            'east': [neighbours[0], neighbours[3], neighbours[1]],
+                            'west': [neighbours[2], neighbours[3], neighbours[1]]}
+
+            # Iterate all 4 directions and iterate all 3 potential states in one direction if any potential state
+            # is wall, set it the original cell
+            for _, possibleStates in states[cell].items():
+                for state in possibleStates:
+                    if state in walls:
+                        possibleStates[possibleStates.index(state)] = cell
+        self.mappedStates = states
+
+    def fourNeighbours(self, cell):
+        """ Get 4 adjacent neighbours of a cell """
+
+        (x, y) = cell
+        east = (x + 1, y)
+        south = (x, y - 1)
+        west = (x - 1, y)
+        north = (x, y + 1)
+        return [east, south, west, north]
+
+    def makeGrid(self, state):
+        """
+            Create a grid of the whole game map.
+            Notice the data structure for grid is set because it can be quickly accessed.
+        """
+
         corners = api.corners(state)
-        # print corners
-        height = self.getLayoutHeight(corners)
-        width  = self.getLayoutWidth(corners)
-        map = Grid(width, height)
-        # First, make all grid elements with an initial value
-        map.setAllValue(initial_value)
+        BL = corners[0]         # Bottom left corner
+        TR = corners[3]         # Top right corner
+        self.width = TR[0]+1    # store the width of the game map
+        self.height = TR[1]+1   # store the height of the game map
+        width = range(BL[0], TR[0]+1)
+        height = range(BL[1], TR[1]+1)
+        self.grid = set((x, y) for x in width for y in height)  # build up the game grid in a python set
 
-        return map
-        
-    # Functions to get the height and the width of the grid.
-    #
-    # We add one to the value returned by corners to switch from the
-    # index (returned by corners) to the size of the grid (that damn
-    # "start counting at zero" thing again).
+    def makeMap(self, state):
+        """
+            Create 'Grid' instances called map. These maps are created for printing, visualization and debugging.
+            Notice in value iteration, we don't use values from these maps.
+        """
+
+        corners = api.corners(state)
+        height = self.getLayoutHeight(corners)
+        width = self.getLayoutWidth(corners)
+        self.map = Grid(width, height)          # pass real width and height (not index)
+        self.rewardMap = Grid(width, height)
+        self.utilityMap = Grid(width, height)
+        self.addWallsToMap(state)
+        self.updateMap(state)
+
+    def updateMap(self, state):
+        """ Update map value for printing """
+
+        # First, make all grid elements that aren't walls blank.
+        for i in range(self.map.getWidth()):
+            for j in range(self.map.getHeight()):
+                if self.map.getValue(i, j) != '%':
+                    # Update grid (printing) map
+                    self.map.setValue(i, j, ' ')
+                    # Update reward and utility map
+                    reward = int(round(self.reward[(i, j)]))
+                    ''' Here we set utility round to 1 digit for easy printing '''
+                    utility = (round(self.utils[(i, j)], 1))
+                    self.rewardMap.setValue(i, j, reward)
+                    self.utilityMap.setValue(i, j, utility)
+
+        food = api.food(state)
+        for i in range(len(food)):
+            self.map.setValue(food[i][0], food[i][1], '.')
+
+        cap = api.capsules(state)
+        for i in range(len(cap)):
+            self.map.setValue(cap[i][0], cap[i][1], 'o')
+
+        ghosts = api.ghosts(state)
+        for i in range(len(ghosts)):
+            ghostX = int(round(ghosts[i][0]))
+            ghostY = int(round(ghosts[i][1]))
+            self.map.setValue(ghostX, ghostY, 'X')
+        pacman = api.whereAmI(state)
+        self.map.setValue(pacman[0], pacman[1], 'P')
+
     def getLayoutHeight(self, corners):
         height = -1
         for i in range(len(corners)):
@@ -249,439 +631,11 @@ class MDPAgent(Agent):
                 width = corners[i][0]
         return width + 1
 
-    # Functions to manipulate the map.
-    #
-    # Put every element in the list of wall elements into the map
-    def addWallsToMap(self, state, grid):
+    def addWallsToMap(self, state):
         walls = api.walls(state)
         for i in range(len(walls)):
-            grid.setValue(walls[i][0], walls[i][1], '%')
+            self.map.setValue(walls[i][0], walls[i][1], '%')
+            self.rewardMap.setValue(walls[i][0], walls[i][1], '%')
+            self.utilityMap.setValue(walls[i][0], walls[i][1], '%')
 
 
-    # Put every element in the list of food elements 
-    # into the map as an initial utility value defined 
-    # from the registerInitialState() function
-    def updateFoodInMap(self, state, grid):
-        food = api.food(state)
-        for i in range(len(food)):
-            value = grid.getValue(food[i][0], food[i][1])
-            grid.setValue(food[i][0], food[i][1], value+self.food_reward)
-
-    # Put every element in the list of capsule elements 
-    # into the map as an initial utility value defined 
-    # from the registerInitialState() function
-    def updateCapsuleInMap(self, state, grid):
-        capsules = api.capsules(state)
-        for i in range(len(capsules)):
-            value = grid.getValue(capsules[i][0], capsules[i][1])
-            grid.setValue(capsules[i][0], capsules[i][1], value+self.capsule_reward)
-
-    # Put every element in the list of ghosts into the map
-    # the initial utility value is obtained by calculateGhostReward() function
-    def updateGhostInMap(self, state, grid):
-        
-        # get locations and its subsequent distance around ghosts
-        ghosts_nearby_locations_distances = self.getLocationsNearGhosts(state)
-
-        for i in range(grid.getWidth()):
-            for j in range(grid.getHeight()):
-                if grid.getValue(i, j) != "%":
-                    value = self.calculateGhostReward((i,j), ghosts_nearby_locations_distances)
-                    grid.setValue(i, j, value)
-
-    # Function that gives pacman a direction to go on to the next state
-    def getAction(self, state):
-
-        # get the current position of the pacman
-        pacman_current_position = api.whereAmI(state)
-        # print "I'm at:", pacman_current_position
-
-        # get locations to avoid that are near the ghost
-        # with additional information 
-        # including it's distance to the ghost and ghost's scared time
-        ghosts_nearby_locations_distances = self.getLocationsNearGhosts(state)
-        # print ghosts_nearby_locations_distances
-
-        # ratio between the total number of food at the beginning of the game 
-        # and the current remaining number of food
-        total_food_ratio = self.total_food_num / len(api.food(state))
-        
-        # update the food reward based on the remaining number of food. 
-        # so that when there is less food left, 
-        # pacman will try it best to finish the game as soon as it can
-        if total_food_ratio > 5:
-            self.food_reward = INITIAL_REWARD_FOOD + 4
-            # self.food_reward = math.pow(INITIAL_REWARD_FOOD, 4)
-        elif total_food_ratio > 3:
-            self.food_reward = INITIAL_REWARD_FOOD + 2
-            # self.food_reward = math.pow(INITIAL_REWARD_FOOD, 3)
-        elif total_food_ratio > 1:
-            self.food_reward = INITIAL_REWARD_FOOD + 1 
-            # self.food_reward = math.pow(INITIAL_REWARD_FOOD, 2)
-
-        # initialise the utility map
-        self.utility_map.setAllValue(self.initial_reward)
-        self.addWallsToMap(state, self.utility_map)
-        self.updateFoodInMap(state, self.utility_map)
-        self.updateGhostInMap(state, self.utility_map)
-
-        # initialise the direction map
-        self.direction_map.setAllValue("")
-        self.addWallsToMap(state, self.direction_map)
-
-        # display the initial map
-        # self.utility_map.prettyDisplay()
-
-        # value iteration for the map
-        self.updateMapUtilities(state, ghosts_nearby_locations_distances)
-
-        # display the current map
-        # self.utility_map.prettyDisplay()
-        # self.direction_map.prettyDisplay()
-
-        # get a set of legal action
-        legal = api.legalActions(state)
-        if Directions.STOP in legal:
-            legal.remove(Directions.STOP)
-
-        # Random choice between the legal options.
-        # return api.makeMove(direction, legal)
-        if self.direction_map.getValue(pacman_current_position[0], pacman_current_position[1]) == '':
-            direction = random.choice(legal)
-        else:
-            direction = self.direction_map.getValue(pacman_current_position[0], pacman_current_position[1])
-
-        # print "result direction =", direction
-        return api.makeMove(direction, legal)
-
-    # Function to get whether an known position contains food
-    def positionHasFood(self, state, position):
-        foodList = api.food(state)
-        for food in foodList:
-            if food[0] == position[0] and food[1] == position[1]:
-                return True
-        
-        return False
-    
-    # Function to get whether an known position contains capsule
-    def positionHasCapsule(self, state, position):
-        capsules = api.capsules(state)
-        for capsule in capsules:
-            if capsule[0] == position[0] and capsule[1] == position[1]:
-                return True
-
-        return False
-
-    # Function to get a target position's value from the map 
-    # given a position and the next direction 
-    # e.g. what is the position's value to the south of (1,1) on utility map ?
-    def targetPositionValue(self, map, position, direction, distance=1):
-        result = '%'
-        result_position = position
-        if direction == Directions.NORTH:
-            result_position = (position[0], position[1]+distance)
-            result = map.getValue(position[0], position[1]+distance)
-        if direction == Directions.SOUTH:
-            result_position = (position[0], position[1]-distance)
-            result = map.getValue(position[0], position[1]-distance)
-        if direction == Directions.WEST:
-            result_position = (position[0]-distance, position[1])
-            result = map.getValue(position[0]-distance, position[1])
-        if direction == Directions.EAST:
-            result_position = (position[0]+distance, position[1])
-            result = map.getValue(position[0]+distance, position[1])
-
-        return result, result_position
-
-    # Function to get whether an known position is near to the ghost
-    def positionNearGhost(self, position, ghosts_nearby_locations_distances):
-        for location_distance_pair in ghosts_nearby_locations_distances:
-            if position[0] == location_distance_pair[0][0] and position[1] == location_distance_pair[0][1]:
-                return True
-        return False
-
-    # Function to calculate the manhattan distance between 2 positions
-    def getManhattanDistance(self, position, ghost_postion):
-        return abs(position[0]-ghost_postion[0]) + abs(position[1]-ghost_postion[1])
-
-    # Function to get all the locations that are near the ghost
-    # which is also a list of locations that pacman should try to avoid
-    #
-    # The returned value are formatted as follows: 
-    # ((x, y), distance to the ghost, ghost edible time) 
-    # the function so through each position on the map 
-    # and calculate distance between it and each of the ghost. 
-    # If the distance is below a certain threshold 
-    # and there is no wall between them, then this location will get added on to the "unsafe location list"
-    # if there are walls between them, then the location in discarded as it should be relatively safe for pacman to be there
-    def getLocationsNearGhosts(self, state):
-
-        # get all the information required: 
-        # locations of walls and locations of ghosts
-        ghosts = api.ghostStatesWithTimes(state)
-        walls = api.walls(state)
-        # the list that contains all of the locations to avoid
-        nearby_locations_distances = []
-
-        for ghost in ghosts:
-
-            ghost_position = ghost[0]
-
-            for i in range(self.utility_map.getWidth()):
-                for j in range(self.utility_map.getHeight()):
-                    distance = self.getManhattanDistance((i, j), ghost_position)
-
-                    # if the distance between the position and the ghost is below 4
-                    if distance < 4:
-                        
-                        # if there are walls between the current position and the ghost
-                        # then there is no need to worry 
-                        if self.getNumWallBetween(walls, (i, j), ghost_position) > 0:
-                            # print "[walls between", (i, j),"and", ghost_position, "]"
-                            # continue to the next position
-                            continue
-                        
-                        # check if the location already exists on the list
-                        for nearby_locations_distance in nearby_locations_distances:
-                            if nearby_locations_distance[0][0] == i and nearby_locations_distance[0][1] == j:
-                                # if distance is nearer here
-                                if nearby_locations_distance[1] > distance:
-                                    nearby_locations_distance = ((i, j), distance, ghost[1])
-                                    # print "location repeated!", (i, j)
-                                    break
-                        
-                        # add this new location to the list 
-                        # that contains all of the locations to avoid
-                        # format: ((x, y), distance to the ghost, ghost edible time)
-                        nearby_locations_distances.append(((i, j), distance, ghost[1]))
-
-        return nearby_locations_distances
-
-    # Function to get number of walls between two locations
-    def getNumWallBetween(self, walls, position, target_position):
-
-        wall_num = 0
-        position = (int(position[0]), int(position[1]))
-        target_position = (int(target_position[0]), int(target_position[1]))
-
-        # if positions are neither on the same column or same horizontal line
-        # then walls in between both directions needed to be calculated
-        if position[0] != target_position[0] and position[1] != target_position[1]:
-            original_target_position = target_position
-            target_position = (position[0], target_position[1])
-            if position[1] > target_position[1]:
-                list = range(target_position[1], position[1])
-            else:
-                list = range(position[1], target_position[1])
-                
-            for num in list:
-                if (position[0], num) in walls:
-                    wall_num += 1
-            
-            target_position = (original_target_position[0], position[1])
-            if position[0] > target_position[0]:
-                list = range(target_position[0], position[0])
-            else:
-                list = range(position[0], target_position[0])
-                
-            for num in list:
-                if (num, position[1]) in walls:
-                    wall_num += 1
-
-        # if positions are on the same horizontal line
-        elif position[0] == target_position[0]:
-            
-            if position[1] > target_position[1]:
-                list = range(target_position[1], position[1])
-            else:
-                list = range(position[1], target_position[1])
-                
-            for num in list:
-                if (position[0], num) in walls:
-                    wall_num += 1
-
-        # if positions are on the same column
-        elif position[1] == target_position[1]:
-            
-            if position[0] > target_position[0]:
-                list = range(target_position[0], position[0])
-            else:
-                list = range(position[0], target_position[0])
-                
-            for num in list:
-                if (num, position[1]) in walls:
-                    wall_num += 1
-
-        return wall_num
-
-    # Function that gives the reward for those positions that are near the ghost
-    # based on infomation including distance to the ghost and remaining scared time 
-    # 
-    # if the ghost is scared then a positive reward is assigned,
-    # otherwise an negative reward is assigned based on its distance to the ghost. 
-    # The closer to the ghost, lower reward (an even more negative value) is assigned.
-    def calculateGhostReward(self, position, ghosts_nearby_locations_distances):
-        reward = 0
-        for location_distance in ghosts_nearby_locations_distances:
-            if position[0] == location_distance[0][0] and position[1] == location_distance[0][1]:
-                distance_to_ghost = location_distance[1]
-                scaredTime = location_distance[2]
-                
-                if scaredTime > 2:
-                    # there are plenty of scared time, 
-                    # so an edible_ghost_reward is assigned. 
-                    reward = self.edible_ghost_reward
-                elif scaredTime > 0:
-                    reward = self.edible_ghost_reward*0.5
-                else:
-                    # the ghost is not scared
-                    # nearby ghost has lower rewards
-                    reward += self.ghost_reward + (distance_to_ghost*0.5)
-        
-        return reward
-
-    # Function that updates the utility value from the self.utility_map 
-    # until all values on the map converges
-    def updateMapUtilities(self, state, ghosts_nearby_locations_distances):
-        
-        # initially, the values are not converging
-        converge = False
-
-        # continue the calculation until the value converges
-        while not converge:
-            
-            # calculate the utility value at each position
-            for i in range(self.utility_map.getWidth()):
-                for j in range(self.utility_map.getHeight()):
-                    if self.utility_map.getValue(i, j) != '%':
-                        # print 'test', self.utility_map.getValue(i, j)
-                        converge = True
-                        position = (i, j)
-                        # calculate the maximum utility value, and the direction that lead to it
-                        maximum_expected_utility_direction, maximum_expected_utility = self.findMaximumExpectedUtility(position, DIRECTIONS)
-                        # get new utility value for the current iteration
-                        updated_utility_value = self.updateUtility(state, position, maximum_expected_utility, ghosts_nearby_locations_distances)
-                        
-                        # testing convergence for the cell
-                        if abs(updated_utility_value - self.utility_map.getValue(i, j)) > self.iteration_threshold:
-                            # print "not converge yet"
-                            converge = False
-                        
-                        # fill new values onto the map
-                        self.utility_map.setValue(i, j, updated_utility_value)
-                        self.direction_map.setValue(i, j, maximum_expected_utility_direction)
-            
-            # print "not converge yet"
-            # self.utility_map.prettyDisplay()
-            # print "================"
-
-    # Function that calculate the utility value using Bellman equation
-    def updateUtility(self, state, position, maximum_expected_utility, ghosts_nearby_locations_distances):
-        # position = api.whereAmI(state)
-        # print "reward = ", self.calculateReward(state, position)
-        updated_utility_value = self.calculateReward(state, position, ghosts_nearby_locations_distances) + self.discount_factor*maximum_expected_utility
-
-        return updated_utility_value
-
-    # Function that find the maximum expected utility from different directions
-    # which returns the direction that gives the maximum expected utility and the utility value
-    def findMaximumExpectedUtility(self, position, directions):
-        maximum_utility_direction = ''
-        maximum_expected_utility = -100
-        expected_utility = -100
-
-        # loops through all directions
-        for d in directions:
-            # calculate the expected utility in direction d
-            expected_utility, there_is_a_wall = self.calculateExpectedUtility(position, d)
-            
-            # if there is a wall in direction, 
-            # then ignore this direction and continue the iteration
-            if there_is_a_wall:
-                continue
-            
-            # store the maximum expected utility value
-            elif expected_utility > maximum_expected_utility:
-                maximum_expected_utility = expected_utility
-                maximum_utility_direction = d
-
-        return maximum_utility_direction, maximum_expected_utility
-
-    # Function that calculate the expected utility at the specified position in the given direction
-    def calculateExpectedUtility(self, position, direction):
-        expected_utility = 0
-        probabilities = [0.8, 0.1, 0.1]
-        there_is_a_wall = False
-
-        # get the last iteration utility value at 4 different directions
-        u_north, _ = self.targetPositionValue(self.utility_map, position, Directions.NORTH)
-        u_south, _ = self.targetPositionValue(self.utility_map, position, Directions.SOUTH)
-        u_west, _ = self.targetPositionValue(self.utility_map, position, Directions.WEST)
-        u_east, _ = self.targetPositionValue(self.utility_map, position, Directions.EAST)
-
-        # if there is a wall in the given direction
-        if u_north == '%':
-            u_north = self.utility_map.getValue(position[0], position[1])
-            if direction == Directions.NORTH:
-                there_is_a_wall = True
-        if u_south == '%':
-            u_south = self.utility_map.getValue(position[0], position[1])
-            if direction == Directions.SOUTH:
-                there_is_a_wall = True
-        if u_west == '%':
-            u_west = self.utility_map.getValue(position[0], position[1])
-            if direction == Directions.WEST:
-                there_is_a_wall = True
-        if u_east == '%':
-            u_east = self.utility_map.getValue(position[0], position[1])
-            if direction == Directions.EAST:
-                there_is_a_wall = True
-        
-        if direction == Directions.NORTH:
-            utilities = [u_north, u_west, u_east]
-        elif direction == Directions.SOUTH:
-            utilities = [u_south, u_east, u_west]
-        elif direction == Directions.WEST:
-            utilities = [u_west, u_south, u_north]
-        elif direction == Directions.EAST:
-            utilities = [u_east, u_north, u_south]
-        
-        expected_utility = sum(self.multiplyArray(utilities, probabilities))
-
-        return expected_utility, there_is_a_wall
-
-    # Function that multiples each element of 2 arrays (with the same length) 
-    # and produce a result array
-    def multiplyArray(self, arr1, arr2):
-        # print arr1, arr2
-        if len(arr1) != len(arr2):
-            print 'arrays length are not stisfied'
-            return
-        res_arr = []
-        for i in range(len(arr1)):
-            res_arr.append(arr1[i] * arr2[i])
-
-        return res_arr
-
-    # Function that culculate the reward value of the specified position
-    # 
-    # if the position is near the ghost then we assign the value 
-    # based on the information got from the function getLocationsNearGhosts() 
-    # and the function calculateGhostReward() that calculate the reward based on that. 
-    # otherwise a (partially) fixed reward is assigned to the position that contains food and capsule
-    def calculateReward(self, state, position, ghosts_nearby_locations_distances):
-
-        reward = self.initial_reward
-
-        # if the position nears the ghost
-        if self.positionNearGhost(position, ghosts_nearby_locations_distances):
-            reward += self.calculateGhostReward(position, ghosts_nearby_locations_distances)
-        else:
-            # if position contains the food
-            if self.positionHasFood(state, position):
-                reward += self.food_reward
-            # if position contains the capsule
-            if self.positionHasCapsule(state, position):
-                reward += self.capsule_reward
-
-        return reward
